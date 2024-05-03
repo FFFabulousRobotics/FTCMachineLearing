@@ -23,11 +23,11 @@ def index_page():
 
 @app.route('/js/<path:path>')
 def send_js(path):
-  return app.send_static_file('static/js/' + path)
+  return app.send_static_file('js/' + path)
 
 @app.route('/css/<path:path>')
 def send_css(path):
-  return app.send_static_file('static/css/' + path)
+  return app.send_static_file('css/' + path)
 
 # api routes
 
@@ -105,7 +105,7 @@ def api_read_frame(video_id, index):
 def api_get_frame_png(frame_id):
   result = video_tool.get_frame_png(frame_id)
   if not result.is_success():
-    return app.send_static_file('static/img/placeholder.png')
+    return app.send_static_file('img/placeholder.png')
   return app.send_static_file(result.data[0])
 
 @app.route('/api/video/<string:video_id>/frames/<int:index>/label',

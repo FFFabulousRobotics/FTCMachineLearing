@@ -81,15 +81,14 @@ class Video:
     new_df = pd.DataFrame([record])
     self.labels = pd.concat([self.labels, new_df], ignore_index=True)
     return ReturnResult.success(label_id)
-  
+
   def unlabel_frame(self, label_id: str):
     self.labels = self.labels.loc[self.labels["label_id"] != label_id]
     return ReturnResult.success()
 
   async def track_one_frame(self, new_frame_index: int,
                             new_frame: cv2.typing.MatLike,
-                            trackers: list[cv2.Tracker],
-                            labels: list[str]):
+                            trackers: list[cv2.Tracker], labels: list[str]):
     result = []
     for i, tracker in enumerate(trackers):
       success, bbox = tracker.update(new_frame)
@@ -125,7 +124,8 @@ class Video:
       raw_bboxes = self.labels["frame_index", "label",
                             "absolute_left", "absolute_top", "absolute_right", "absolute_bottom"] \
         .loc[self.labels["frame_index"] == frame_index]
-      bboxes = raw_bboxes["absolute_left", "absolute_top", "absolute_right", "absolute_bottom"].to_dict(orient="records")
+      bboxes = raw_bboxes["absolute_left", "absolute_top", "absolute_right",
+                          "absolute_bottom"].to_dict(orient="records")
       labels = raw_bboxes["label"].array
       trackers = []
       for bbox in bboxes:
@@ -153,7 +153,8 @@ class Video:
         frame_path = os.path.join(DATA_FOLDER, "video", self.identifier,
                                   f"frame_{frame_index}.png")
         frame = cv2.imread(frame_path)
-        result = await self.track_one_frame(frame_index, frame, trackers, labels)
+        result = await self.track_one_frame(frame_index, frame, trackers,
+                                            labels)
         if not result.is_success():
           return result
         self.labels = pd.concat(
@@ -197,6 +198,10 @@ def cancel_process(video_identifier: str):
   video.coro_task.cancel()
   return ReturnResult.success()
 
+async def cleanup_frame_cache(frame_id):
+  await asyncio.sleep(10)
+  os.remove(os.path.join("static", "img", "tmp", f"{frame_id}.png"))
+
 def read_frame(video_identifier: str, frame_index: int):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
@@ -208,7 +213,10 @@ def read_frame(video_identifier: str, frame_index: int):
   frame_path = os.path.join(DATA_FOLDER, "video", video_identifier,
                             f"frame_{frame_index}.png")
   frame_id = uuid4().hex
-  frame_ids[frame_id] = frame_path
+  shutil.copyfile(frame_path,
+                  os.path.join("static", "img", "tmp", f"{frame_id}.png"))
+  frame_ids[frame_id] = os.path.join("img", "tmp", f"{frame_id}.png")
+  asyncio.create_task(cleanup_frame_cache(frame_id))
   frame_labels = video.labels \
     ["label_id", "frame_index", "label", \
     "absolute_left", "absolute_top", "absolute_right", "absolute_bottom"] \
