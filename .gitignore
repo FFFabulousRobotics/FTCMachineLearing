@@ -1,0 +1,11 @@
+# python virtual environment
+.venv/
+
+# IDE specific
+.vscode/
+.idea/
+
+# npm related, for type annotations only
+node_modules/
+package.json
+package-lock.json
