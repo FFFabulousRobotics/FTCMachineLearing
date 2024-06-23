@@ -1,13 +1,17 @@
-from multiprocessing.managers import DictProxy
-from multiprocessing import Manager
 from enum import IntEnum
-from common import BackendError, ReturnResult, DATA_FOLDER
+
+import aiofiles.os
+import aioshutil
+from quart import Quart
+from common import BackendError, DictProxy, ReturnResult, DATA_FOLDER, ensure_directory
 from uuid import uuid4
+from pathlib import Path
+from typing import Tuple, List, Union
+import json
 import pandas as pd
-import shutil
 import asyncio
+import aiofiles
 import cv2
-import os
 
 class Video:
 
@@ -17,25 +21,27 @@ class Video:
     COMPLETED = 2
     CANCELLED = -1
 
-  def __init__(self, tmp_file_path: str):
-    self.tmp_file_path = tmp_file_path
-    self.identifier = uuid4().hex
+  def __init__(self, name: str, identifier: Union[str, None] = None):
+    self.name = name
+    self.identifier = identifier if identifier else uuid4().hex
 
-  async def frame_extract(self):
+  async def frame_extract(self, tmp_file_path: str):
     try:
       self.process_status = Video.ProcessStatus.PREPARING
-      video = cv2.VideoCapture(self.tmp_file_path)
+      video = cv2.VideoCapture(tmp_file_path)
       frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
       self.total_frame_count = frame_count
       self.extracted_frame_count = 0
       self.process_status = Video.ProcessStatus.PROCESSING
+      ensure_directory(Path(DATA_FOLDER, "videos", self.identifier))
       for i in range(frame_count):
         ret, frame = video.read()
         if not ret:
           break
         cv2.imwrite(
-            os.path.join(DATA_FOLDER, "video", self.identifier,
-                         f"frame_{i+1}.png"), frame)
+            str(
+                Path(DATA_FOLDER, "videos", self.identifier,
+                     f"frame_{i+1}.png").absolute()), frame)
         self.extracted_frame_count += 1
       self.resolution = (int(video.get(cv2.CAP_PROP_FRAME_WIDTH)),
                          int(video.get(cv2.CAP_PROP_FRAME_HEIGHT)))
@@ -43,22 +49,34 @@ class Video:
           "frame_index", "label", "left", "top", "right", "bottom",
           "absolute_left", "absolute_top", "absolute_right", "absolute_bottom"
       ])
+      self.excluded_frames = []
       self.process_status = Video.ProcessStatus.COMPLETED
     except asyncio.CancelledError:
       self.process_status = Video.ProcessStatus.CANCELLED
-      shutil.rmtree(os.path.join(DATA_FOLDER, "video", self.identifier))
+      await aioshutil.rmtree(Path(DATA_FOLDER, "videos", self.identifier))
+    except Exception as e:
+      self.process_status = Video.ProcessStatus.CANCELLED
+      await aioshutil.rmtree(Path(DATA_FOLDER, "videos", self.identifier))
     finally:
+      print("Video frame extract finished: " + self.identifier)
       video.release()
-      os.remove(self.tmp_file_path)
+      await aiofiles.os.remove(tmp_file_path)
 
-  def start_frame_extract(self):
-    self.coro_task = asyncio.create_task(self.frame_extract())
+  def start_frame_extract(self, tmp_file_path: str):
+    coro = self.frame_extract(tmp_file_path)
+    self.frame_extract_task = asyncio.ensure_future(coro)
+    asyncio.run_coroutine_threadsafe(coro=coro, loop=asyncio.get_event_loop())
+
+  def exclude_frame(self, frame_index: int):
+    self.excluded_frames.append(frame_index)
 
   def frame_extract_finished(self):
+    if not hasattr(self, "process_status"):
+      return False
     return self.process_status == Video.ProcessStatus.COMPLETED \
       or self.process_status == Video.ProcessStatus.CANCELLED
 
-  def label_frame(self, frame_index: int, label: str, box: tuple[int, int, int,
+  def label_frame(self, frame_index: int, label: str, box: Tuple[int, int, int,
                                                                  int]):
     if self.total_frame_count < frame_index:
       return ReturnResult(BackendError.FRAME_NOT_FOUND)
@@ -88,7 +106,7 @@ class Video:
 
   async def track_one_frame(self, new_frame_index: int,
                             new_frame: cv2.typing.MatLike,
-                            trackers: list[cv2.Tracker], labels: list[str]):
+                            trackers: List[cv2.Tracker], labels: List[str]):
     result = []
     for i, tracker in enumerate(trackers):
       success, bbox = tracker.update(new_frame)
@@ -118,109 +136,169 @@ class Video:
                              continue_event: asyncio.Event):
     try:
       frame_index = starting_frame_index
-      frame_path = os.path.join(DATA_FOLDER, "video", self.identifier,
-                                f"frame_{frame_index}.png")
-      frame = cv2.imread(frame_path)
+      frame_path = Path(DATA_FOLDER, "videos", self.identifier,
+                        f"frame_{frame_index}.png")
+      frame = cv2.imread(str(frame_path.absolute()))
       raw_bboxes = self.labels["frame_index", "label",
                             "absolute_left", "absolute_top", "absolute_right", "absolute_bottom"] \
         .loc[self.labels["frame_index"] == frame_index]
-      bboxes = raw_bboxes["absolute_left", "absolute_top", "absolute_right",
-                          "absolute_bottom"].to_dict(orient="records")
-      labels = raw_bboxes["label"].array
+      bboxes = raw_bboxes["absolute_left", "absolute_top",
+                          "absolute_right", "absolute_bottom"].to_dict(
+                              orient="records")  # type: ignore
+      labels = raw_bboxes["label"].tolist()
       trackers = []
       for bbox in bboxes:
-        match algorithm:
-          case "KCF":
-            tracker = cv2.TrackerKCF()
-          case "MedianFlow":
-            tracker = cv2.legacy.TrackerMedianFlow()
-          case "MOSSE":
-            tracker = cv2.legacy.TrackerMOSSE()
-          case "CSRT":
-            tracker = cv2.TrackerCSRT()
-          case "MIL":
-            tracker = cv2.TrackerMIL()
-          case "TLD":
-            tracker = cv2.legacy.TrackerTLD()
-          case "Boosting":
-            tracker = cv2.legacy.TrackerBoosting()
+        if algorithm == "KCF":
+          tracker = cv2.TrackerKCF()
+        elif algorithm == "MedianFlow":
+          tracker = cv2.legacy.TrackerMedianFlow()
+        elif algorithm == "MOSSE":
+          tracker = cv2.legacy.TrackerMOSSE()
+        elif algorithm == "CSRT":
+          tracker = cv2.TrackerCSRT()
+        elif algorithm == "MIL":
+          tracker = cv2.TrackerMIL()
+        elif algorithm == "TLD":
+          tracker = cv2.legacy.TrackerTLD()
+        elif algorithm == "Boosting":
+          tracker = cv2.legacy.TrackerBoosting()
+        else:
+          raise ValueError(f"Unknown tracker algorithm: {algorithm}")
+
         trackers.append(tracker)
         tracker.init(frame, (bbox["absolute_left"], bbox["absolute_top"],
                              bbox["absolute_right"] - bbox["absolute_left"],
                              bbox["absolute_bottom"] - bbox["absolute_top"]))
       frame_index += 1
       while frame_index <= self.total_frame_count:
-        frame_path = os.path.join(DATA_FOLDER, "video", self.identifier,
-                                  f"frame_{frame_index}.png")
-        frame = cv2.imread(frame_path)
+        frame_path = Path(DATA_FOLDER, "videos", self.identifier,
+                          f"frame_{frame_index}.png")
+        frame = cv2.imread(str(frame_path.absolute()))
         result = await self.track_one_frame(frame_index, frame, trackers,
                                             labels)
-        if not result.is_success():
+        if not result.is_success:
           return result
         self.labels = pd.concat(
             [self.labels, pd.DataFrame(result.data)], ignore_index=True)
         continue_event.clear()
-        continue_event.wait()
+        await continue_event.wait()
         frame_index += 1
       return ReturnResult.success()
     except asyncio.CancelledError:
       return ReturnResult(BackendError.TASK_WAS_CANCELLED)
+
+  def start_object_tracking(self, starting_frame_index: int, algorithm: str,
+                            continue_event: asyncio.Event):
+    coro = self.track_from_frame(starting_frame_index, algorithm,
+                                 continue_event)
+    self.track_task = asyncio.ensure_future(coro)
+    asyncio.run_coroutine_threadsafe(coro=coro, loop=asyncio.get_event_loop())
+    return self.track_task
 
   @property
   def info(self):
     if self.frame_extract_finished():
       labeled_frame_count = len(
           self.labels.drop_duplicates(subset=["frame_index"]))
-      return self.resolution, self.total_frame_count, labeled_frame_count
+      excluded_frame_count = len(self.excluded_frames)
+      return self.name, self.resolution, self.total_frame_count, labeled_frame_count, excluded_frame_count
     else:
-      return self.process_status, self.total_frame_count, self.extracted_frame_count
+      return self.name, self.process_status, self.total_frame_count, self.extracted_frame_count
 
-video_tool_manager = Manager()
-videos: DictProxy[str, Video] = video_tool_manager.dict()
-frame_ids: DictProxy[str, str] = video_tool_manager.dict()
+  def to_dict(self):
+    if self.frame_extract_finished():
+      self.save_labels()
+      return ReturnResult.success({
+          "name": self.name,
+          "identifier": self.identifier,
+          "resolution": self.resolution,
+          "total_frame_count": self.total_frame_count,
+          "excluded_frames": self.excluded_frames
+      })
+    else:
+      return ReturnResult(BackendError.VIDEO_PROCESSING)
 
-def upload_video(tmp_file_path: str):
-  video = Video(tmp_file_path)
-  videos[video.identifier] = video
-  video.start_frame_extract()
-  return ReturnResult.success(video.identifier)
+  def save_labels(self):
+    self.labels.to_csv(Path(DATA_FOLDER, "videos", self.identifier,
+                            "labels.csv"),
+                       index=False)
 
-def get_video_info(video_identifier: str):
+  def load_labels(self):
+    if Path(DATA_FOLDER, "videos", self.identifier, "labels.csv").exists():
+      self.labels = pd.read_csv(
+          Path(DATA_FOLDER, "videos", self.identifier, "labels.csv"))
+    else:
+      self.labels = pd.DataFrame(columns=[
+          "frame_index", "label", "left", "top", "right", "bottom",
+          "absolute_left", "absolute_top", "absolute_right", "absolute_bottom"
+      ])
+
+  @classmethod
+  def from_dict(cls, d: dict):
+    if "name" not in d or "identifier" not in d or "resolution" not in d or "total_frame_count" not in d or "excluded_frames" not in d:
+      return ReturnResult(BackendError.INVALID_ARGUMENT)
+    video = cls(d["name"], d["identifier"])
+    video.resolution = d["resolution"]
+    video.total_frame_count = d["total_frame_count"]
+    video.excluded_frames = d["excluded_frames"]
+    video.process_status = Video.ProcessStatus.COMPLETED
+    video.frame_extract_task = None
+    video.track_task = None
+    video.load_labels()
+    return ReturnResult.success(video)
+
+videos: DictProxy[str, Video] = DictProxy()
+frame_ids: DictProxy[str, str] = DictProxy()
+
+async def upload_video(name: str, tmp_file_path: str):
+  video = Video(name)
+  await videos.put(video.identifier, video)
+  video.start_frame_extract(tmp_file_path)
+  return ReturnResult.success(name, video.identifier)
+
+async def get_video_info(video_identifier: str):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
-  video = videos[video_identifier]
+  video = await videos[video_identifier]
   return ReturnResult.success(video.frame_extract_finished(), *video.info)
 
-def cancel_process(video_identifier: str):
+async def get_all_videos():
+  video_infos = {}
+  for video in await videos.values():
+    video_infos[video.identifier] = (video.frame_extract_finished(),
+                                     *video.info)
+  return ReturnResult.success(video_infos)
+
+async def cancel_process(video_identifier: str):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
-  video = videos[video_identifier]
-  video.coro_task.cancel()
+  video = await videos[video_identifier]
+  video.frame_extract_task.cancel()
   return ReturnResult.success()
 
 async def cleanup_frame_cache(frame_id):
   await asyncio.sleep(10)
-  os.remove(os.path.join("static", "img", "tmp", f"{frame_id}.png"))
+  await aiofiles.os.remove(Path("static", "img", "tmp", f"{frame_id}.png"))
 
-def read_frame(video_identifier: str, frame_index: int):
+async def read_frame(video_identifier: str, frame_index: int):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
-  video = videos[video_identifier]
+  video = await videos[video_identifier]
   if video.total_frame_count < frame_index:
     return ReturnResult(BackendError.FRAME_NOT_FOUND)
   if not video.frame_extract_finished():
     return ReturnResult(BackendError.VIDEO_PROCESSING)
-  frame_path = os.path.join(DATA_FOLDER, "video", video_identifier,
-                            f"frame_{frame_index}.png")
+  frame_path = Path(DATA_FOLDER, "videos", video_identifier,
+                    f"frame_{frame_index}.png")
   frame_id = uuid4().hex
-  shutil.copyfile(frame_path,
-                  os.path.join("static", "img", "tmp", f"{frame_id}.png"))
-  frame_ids[frame_id] = os.path.join("img", "tmp", f"{frame_id}.png")
+  await aioshutil.copyfile(frame_path,
+                           Path("static", "img", "tmp", f"{frame_id}.png"))
+  frame_ids[frame_id] = f"img/tmp/{frame_id}.png"
   asyncio.create_task(cleanup_frame_cache(frame_id))
   frame_labels = video.labels \
     ["label_id", "frame_index", "label", \
     "absolute_left", "absolute_top", "absolute_right", "absolute_bottom"] \
-    .loc[video.labels["frame_index"] == frame_index].to_dict(orient="records")
+    .loc[video.labels["frame_index"] == frame_index].to_dict(orient="records") # type: ignore
   return ReturnResult.success(frame_id, frame_labels)
 
 def get_frame_png(frame_id: str):
@@ -230,24 +308,31 @@ def get_frame_png(frame_id: str):
   del frame_ids[frame_id]
   return ReturnResult.success(frame_path)
 
-def label_frame(video_identifier: str, frame_index: int, label: str,
-                box: tuple[int, int, int, int]):
+async def label_frame(video_identifier: str, frame_index: int, label: str,
+                      box: Tuple[int, int, int, int]):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
-  video = videos[video_identifier]
+  video = await videos[video_identifier]
   return video.label_frame(frame_index, label, box)
 
-def unlabel_frame(video_identifier: str, label_id: str):
+async def unlabel_frame(video_identifier: str, label_id: str):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
-  video = videos[video_identifier]
+  video = await videos[video_identifier]
   return video.unlabel_frame(label_id)
 
-def start_object_tracking(video_identifier: str, start_frame_index: int,
-                          algorithm: str):
+async def exclude_frame(video_identifier: str, frame_index: int):
   if video_identifier not in videos:
     return ReturnResult(BackendError.VIDEO_NOT_FOUND)
-  video = videos[video_identifier]
+  video = await videos[video_identifier]
+  video.exclude_frame(frame_index)
+  return ReturnResult.success()
+
+async def start_object_tracking(video_identifier: str, start_frame_index: int,
+                                algorithm: str):
+  if video_identifier not in videos:
+    return ReturnResult(BackendError.VIDEO_NOT_FOUND)
+  video = await videos[video_identifier]
   if video.total_frame_count < start_frame_index:
     return ReturnResult(BackendError.FRAME_NOT_FOUND)
   if video.total_frame_count == start_frame_index:
@@ -262,6 +347,30 @@ def start_object_tracking(video_identifier: str, start_frame_index: int,
   if start_frame_index not in video.labels["frame_index"].array:
     return ReturnResult(BackendError.FRAME_NOT_LABELED)
   continue_event = asyncio.Event()
-  task = asyncio.create_task(
-      video.track_from_frame(start_frame_index, algorithm, continue_event))
+  task = video.start_object_tracking(start_frame_index, algorithm,
+                                     continue_event)
   return ReturnResult.success(task, continue_event)
+
+async def save_videos():
+  json_dict = []
+  for video in await videos.values():
+    if (vresult := video.to_dict()).is_success:
+      json_dict.append(vresult.data)
+    else:
+      print(f"Failed to save video {video.identifier}")
+  with open(Path(DATA_FOLDER, "videos.json"), "w") as f:
+    json.dump(json_dict, f)
+  print(f"Saved {len(json_dict)} videos")
+
+async def load_videos():
+  if not Path(DATA_FOLDER, "videos.json").exists():
+    return
+  with open(Path(DATA_FOLDER, "videos.json"), "r") as f:
+    videos_json = json.load(f)
+  for video_json in videos_json:
+    vresult = Video.from_dict(video_json)
+    if vresult.is_success:
+      await videos.put(vresult.data.identifier, vresult.data)
+    else:
+      print(f"Failed to load video {video_json['identifier']}")
+  print(f"Loaded {len(videos)} videos")

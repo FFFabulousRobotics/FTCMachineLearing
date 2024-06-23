@@ -1,0 +1,84 @@
+{% extends "base.html.j2" %}
+{% block title %}
+  FTC Machine Learning
+{% endblock title %}
+{% block head %}
+  <link rel="stylesheet" href="/css/index.css" />
+  <script src="https://cdn.staticfile.net/jquery/3.7.1/jquery.min.js"></script>
+  <script src="/js/index.js"></script>
+{% endblock head %}
+{% set body_classes = "flex flex-column aligned-center justified-start" %}
+{% block body %}
+  <h1 class="red-hat-bold" style="margin: 1em">FTC Machine Learning</h1>
+  <div id="main-container"
+       class="flex flex-column justified-start aligned-start">
+    <div class="flex flex-row justified-start aligned-center">
+      <button id="videos-tool-button" class="selector-button">Videos</button>
+      <button id="datasets-tool-button" class="selector-button">Datasets</button>
+      <button id="models-tool-button" class="selector-button">Models</button>
+    </div>
+    <div id="tool-container" class="rounded-rect">
+      <div id="videos-tool"
+           class="flex flex-column aligned-start justified-start small-dist">
+        <div class="flex flex-row aligned-start justified-center normal-dist">
+          <button id="upload-video-button" class="rounded-rect">Upload Video</button>
+          <button id="produce-dataset-button" class="rounded-rect">Produce Dataset</button>
+          <button id="delete-videos-button" class="rounded-rect">Delete Videos</button>
+        </div>
+        <div class="stretch-width">
+          <table id="videos-list" class="stretch-width">
+            <thead>
+              <tr>
+                <th scope="col" rowspan="2">
+                  <input type="checkbox" id="select-all-videos" />
+                </th>
+                <th scope="col" rowspan="2">Name</th>
+                <th scope="col" rowspan="2">Resolution</th>
+                <th scope="col" rowspan="2">Status</th>
+                <th scope="col" colspan="4">Frame count</th>
+                <th scope="col" rowspan="2">Action</th>
+              </tr>
+              <tr>
+                <th scope="col">Total</th>
+                <th scope="col">Extracted</th>
+                <th scope="col">Labeled</th>
+                <th scope="col">Excluded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for video in videos %}
+                <tr>
+                  <td>
+                    <input type="checkbox" class="video-selector" vid="{{ video.id }}" />
+                  </td>
+                  <td>{{ video.name }}</td>
+                  <td>{{ video.resolution }}</td>
+                  <td>{{ video.status }}</td>
+                  <td>{{ video.total_frames }}</td>
+                  <td>{{ video.extracted_frames }}</td>
+                  <td>{{ video.labeled_frames }}</td>
+                  <td>{{ video.excluded_frames }}</td>
+                  <td>
+                    <button class="rounded-rect" vid="{{ video.id }}">Label</button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div id="datasets-tool"></div>
+      <div id="models-tool"></div>
+    </div>
+  </div>
+  <div id="dimmed-background"
+       class="flex flex-column aligned-start justified-center popups"></div>
+  <button id="close-popup"
+          class="popups"
+          onclick="$('.popups').hide();$('#popup').empty();">&#215;</button>
+  <div id="popup"
+       class="flex flex-column aligned-start justified-start popups">
+    <iframe name="formdummy" style="display:none"></iframe>
+  </div>
+  <style>.popups{display:none}</style>
+{% endblock body %}

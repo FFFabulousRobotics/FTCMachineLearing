@@ -1,4 +1,5 @@
-# python virtual environment
+# python
+**/__pycache__/
 .venv/
 
 # IDE specific
@@ -9,3 +10,6 @@
 node_modules/
 package.json
 package-lock.json
+
+# data
+data/

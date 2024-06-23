@@ -1,0 +1,9 @@
+{% extends "base.html.j2" %}
+{% block title %}
+Woah!
+{% endblock title %}
+{% set body_classes="flex flex-column aligned-center justified-center" %}
+{% block body %}
+<h1>Something went wrong...</h1>
+<p style="font-size: 0.5em;">Error code: {{ error_code }}</p>
+{% endblock body %}

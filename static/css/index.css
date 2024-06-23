@@ -1,0 +1,78 @@
+div#main-container {
+  min-width: 70%;
+  max-width: 90%;
+  width: fit-content;
+}
+
+div#main-container > * {
+  width: 100%;
+}
+
+div#tool-container {
+  padding: 0.5em;
+  border: solid gray 2px;
+  margin-top: -2px;
+  border-top-left-radius: 0;
+}
+
+button.selector-button {
+  margin: 0 -2px 0 0;
+  border-radius: 5px 5px 0 0;
+}
+
+div#dimmed-background {
+  background-color: black;
+  opacity: 0.6;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+div#popup {
+  color: var(--text-color);
+  border: solid var(--border-color) 4px;
+  padding: 0.5em;
+  background-color: var(--background-color);
+  border-radius: 5px;
+  opacity: 1;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  width: fit-content;
+  min-width: 30%;
+  max-width: 90%;
+  height: fit-content;
+  min-height: 20%;
+  max-height: 90%;
+  overflow: auto;
+}
+
+button#close-popup {
+  position: absolute;
+  right: 0.5em;
+  top: 0.5em;
+  border: none;
+  background-color: transparent;
+  font-size: 1.5em;
+  color: white;
+}
+
+table,
+th,
+td {
+  border: 1px solid lightgray;
+  border-collapse: collapse;
+}
+
+td {
+  padding: 0.5em;
+}
+
+td:has(> .video-selector, > button) {
+  text-align: center;
+  vertical-align: middle;
+}
